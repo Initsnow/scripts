@@ -39,22 +39,33 @@ def sync [path:path,remotepath:string,remote?:string] {
 
 #Copy files in the remote path to the specified directory
 def "main pull" [
-  remote_index:number = 1
+  remote_index:number = 1 # If the file has multiple remote network disks, one of the specified will
 ] {
   get_pwd
   if $ping_output.exit_code == 0 {
     print "Internet connection is OK"
-    open paths.toml | get path | transpose local remote | each {|e| pull $e.remote $e.local $remote_index}
+    for e in (open paths.toml | get path | transpose local remote) {
+      if ($e.remote|describe) == list<string> {
+        pull $e.remote.0 $e.local $remote_index $e.remote.1
+      } else {
+        pull $e.remote $e.local $remote_index
+      }
+    }
   } else {
     print "Unable to connect to the internet!"
     print $"Ping output:($ping_output.stdout)"
   }
 }
 
-def pull [remotepath:string,path:path,remote_index:int] {
-  let remote = $env.RCLONE_CONFIG_PASS
-  print $"\n($remote):($remotepath) is copying to ($path)"
-  rclone copy -P $'($remote):($remotepath)' $path
+def pull [remotepath:string,path:path,remote_index:int,remote?:string] {
+  if $remote != null {
+    print $"\n($remote):($remotepath) is copying to ($path)"
+    rclone copy -P $'($remote):($remotepath)' $path
+  } else {
+    let remote = open paths.toml | get remote | get $remote_index
+    print $"\n($remote):($remotepath) is copying to ($path)"
+    rclone copy -P $'($remote):($remotepath)' $path
+  }
 }
 
 def main [] {}
