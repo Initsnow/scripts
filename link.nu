@@ -43,7 +43,14 @@ def "main remove" [] {
   }
 
   if (is-admin) {
-      open linkfiles.toml | get files.linkto | each {|f| rm $f}
+      for f in (open linkfiles.toml | get files.linkto) {
+        let $r = powershell rm $f | complete # Why not use built-in rm: https://github.com/nushell/nushell/issues/11652
+        if $r.exit_code == 0 {
+          print $"Remove (ansi green)($f)(ansi reset) successfully"
+        } else {
+          print -e $"(ansi red)($r.stderr | decode gbk)(ansi reset)"
+        }
+      }
   } else {
     print "Run it as admin."
   }

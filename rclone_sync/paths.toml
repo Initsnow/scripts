@@ -5,3 +5,4 @@ remote=['onedrive','gdrive']
 'C:\Users\Initsnow\Documents\backups\config'='backups\config'
 'C:\Users\Initsnow\Documents\backups\script'='backups\script'
 'C:\Users\Initsnow\Documents\books'=['backups\books',"gdrive"]
+'C:\Users\Initsnow\Documents\music scores'='backups\music scores'
