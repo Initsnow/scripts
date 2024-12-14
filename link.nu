@@ -7,14 +7,14 @@ def main [] {
         let src = ($e.src | path expand);
         let linkto = ($e.linkto | path expand);
         mkdir -v $'($linkto | path dirname)';
-        mklink $linkto $src;
+        do -i { mklink $linkto $src; }
       }
     } else if $kernel_name == "Linux" {
       for e in (open linkfiles.toml | get files) {
         let src = ($e.src | path expand);
         let linkto = ($e.linkto | path expand);
         mkdir -v $'($linkto | path dirname)';
-        ln -s $linkto $src;
+        do -i { ln -s $linkto $src; }
       }
     } else {
       print "Unknown system" 
