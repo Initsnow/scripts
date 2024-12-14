@@ -1,11 +1,11 @@
-from bs4 import BeautifulSoup
+import os
 import re
-import requests
 import time
 import toml
-import subprocess
 import logging
-import os
+import requests
+import subprocess
+from bs4 import BeautifulSoup
 
 logging.basicConfig(level=logging.INFO)
 
@@ -14,147 +14,124 @@ def run(command):
     return os.system(command)
 
 
-def aria2c_download(url: str, dir: str):
-    if run(f"aria2c -c -s 8 -x 8 -k 1M -j 1 -Z --dir {dir} {url}") == 0:
-        print(f"Downloaded {url} successfully")
+def aria2c_download(urls, directory):
+    if run(f"aria2c -c -s 8 -x 8 -k 1M -j 1 -Z --dir {directory} {urls}") == 0:
+        logging.info(f"Downloaded {urls} successfully")
     else:
-        raise Exception(f"Faield to download {url}")
+        raise Exception(f"Failed to download {urls}")
 
 
 def read_config(section, key, filename="config.toml"):
     with open(filename, "r") as f:
-        config = toml.load(f)
-        return config[section][key]
+        return toml.load(f)[section][key]
 
 
 def save_config(section, key, value, filename="config.toml"):
-    try:
-        with open(filename, "r+") as f:
+    config = {}
+    if os.path.exists(filename):
+        with open(filename, "r") as f:
             config = toml.load(f)
-            f.seek(0, 0)  # move the cursor to the beginning of the file
-            config[section][key] = value
-            toml.dump(config, f)
-    except FileNotFoundError:
-        with open(filename, "w") as f:
-            toml.dump({section: {key: value}}, f)
+    config.setdefault(section, {})[key] = value
+    with open(filename, "w") as f:
+        toml.dump(config, f)
 
 
 def lineage_download(device_code):
     res = requests.get(
         f"https://download.lineageos.org/api/v2/devices/{device_code}/builds"
     ).json()[0]
-    timestamp_remote = res["datetime"]
+    remote_timestamp = res["datetime"]
+
     try:
-        timestamp_local = read_config("data", "timestamp")
-        if int(timestamp_local) >= timestamp_remote:
+        local_timestamp = int(read_config("data", "timestamp"))
+        if local_timestamp >= remote_timestamp:
             raise Exception(f"LineageOS for {device_code} hasn't been updated yet")
     except FileNotFoundError:
-        print("config.toml not found, now create a new one")
-        save_config("data", "timestamp", timestamp_remote)
-    urls = ""
-    sha256 = {}
-    for i in res["files"]:
-        if i["filename"] != "vbmeta.img" and i["filename"] != "super_empty.img":
-            print(i["filename"])
-            urls += i["url"] + " "
-            sha256[i["filename"]] = i["sha256"]
+        logging.info("config.toml not found, creating a new one")
+    save_config("data", "timestamp", remote_timestamp)
+
+    urls = " ".join(
+        file["url"]
+        for file in res["files"]
+        if file["filename"] not in {"vbmeta.img", "super_empty.img"}
+    )
+    sha256 = {
+        file["filename"]: file["sha256"]
+        for file in res["files"]
+        if file["filename"] not in {"vbmeta.img", "super_empty.img"}
+    }
+
     aria2c_download(urls, "tmp")
-    # todo: sha256
-    print(sha256)
+    logging.info(sha256)
 
 
 def wait_until_string_appears(command, target_string, interval=1):
-    """
-    循环调用外部程序，直到输出中包含目标字符串。
-
-    :param command: list，外部程序的命令及参数，例如 ["ping", "127.0.0.1", "-c", "1"]。
-    :param target_string: str，目标字符串。
-    :param interval: int，重复调用之间的间隔时间（秒）。
-    :return: None
-    """
     while True:
-        # 调用外部程序并捕获输出
         result = subprocess.run(command, text=True, capture_output=True)
-
-        logging.debug(result.stdout.strip())
-
         if target_string in result.stdout:
-            logging.debug("\n目标字符串已出现")
+            logging.debug("Target string appeared")
             break
-
         time.sleep(interval)
 
 
-def rm_tmp():
-    for root, dirs, files in os.walk("tmp/"):
-        for n in files:
-            os.remove(os.path.join(root, n))
-        for n in dirs:
-            os.rmdir(os.path.join(root, n))
-        os.rmdir(root)
+def clear_tmp():
+    for root, dirs, files in os.walk("tmp/", topdown=False):
+        for name in files:
+            os.remove(os.path.join(root, name))
+        for name in dirs:
+            os.rmdir(os.path.join(root, name))
+    os.rmdir("tmp/")
 
 
 def lineage_flash():
     files = os.listdir("tmp")
-    boot_filename = None
-    recovery_filename = None
-    lineage_zip_filename = None
+    boot = next((f for f in files if "boot.img" in f), None)
+    recovery = next((f for f in files if "recovery.img" in f), None)
+    lineage_zip = next(
+        (f for f in files if "lineage-" in f and f.endswith(".zip")), None
+    )
 
-    for f in files:
-        if "lineage-" in f and ".zip" in f:
-            lineage_zip_filename = f
-        elif "boot.img" in f:
-            boot_filename = f
-        elif "recovery.img" in f:
-            recovery_filename = f
+    if not boot or not recovery:
+        raise FileNotFoundError("Required image files not found in tmp/")
 
-    if boot_filename is None:
-        raise FileNotFoundError("boot.img doesn't exist")
-    if recovery_filename is None:
-        raise FileNotFoundError("recovery.img doesn't exist")
-
-    print("Boot into fastboot mode now")
+    logging.info("Boot into fastboot mode now")
     wait_until_string_appears(["fastboot", "devices"], "fastboot")
-    print("Device is connected")
-    run(f"fastboot flash boot tmp/{boot_filename}")
-    run(f"fastboot flash recovery tmp/{recovery_filename}")
-    print("Reboot to recovery mode and open adb sideload")
+    run(f"fastboot flash boot tmp/{boot}")
+    run(f"fastboot flash recovery tmp/{recovery}")
+
+    logging.info("Reboot to recovery mode and open adb sideload")
     wait_until_string_appears(["adb", "devices"], "\tsideload")
+    run(f"adb sideload tmp/{lineage_zip}")
 
-    run(f"adb sideload tmp/{lineage_zip_filename}")
-
-    rm_tmp()
+    clear_tmp()
 
 
 def lineage_with_microG_download(device_code):
     html = requests.get(f"https://download.lineage.microg.org/{device_code}/").text
     soup = BeautifulSoup(html, "html.parser")
-    links = []
-    for i in soup.select("td>a"):
-        links.append(i["href"])
-    logging.debug(links)
-    date = set()
-    for i in links:
-        a = re.search(r"\d{8}", i)
-        if a != None:
-            date.add(a.group())
-        else:
-            logging.debug(f"Can't match date in: {i}")
-    maxdate = max(date)
-    url = []
-    for i in links:
-        if (
-            maxdate in i
-            and ".sha256sum" not in i
-            and "super_empty.img" not in i
-            and "vbmeta.img" not in i
-        ):
-            url.append(f"https://download.lineage.microg.org/{device_code}/{i[2:]}")
-    aria2c_download(" ".join(url), "tmp")
+
+    links = [a["href"] for a in soup.select("td > a")]
+    dates = {match.group() for link in links if (match := re.search(r"\d{8}", link))}
+
+    if not dates:
+        logging.error("No valid dates found in links")
+        return
+
+    latest_date = max(dates)
+    download_urls = [
+        f"https://download.lineage.microg.org/{device_code}/{link[2:]}"
+        for link in links
+        if latest_date in link
+        and all(
+            excl not in link for excl in {".sha256sum", "super_empty.img", "vbmeta.img"}
+        )
+    ]
+
+    aria2c_download(" ".join(download_urls), "tmp")
 
 
 if __name__ == "__main__":
     lineage_download("polaris")
     # lineage_with_microG_download("polaris")
     lineage_flash()
-    print("Done.")
+    logging.info("Done.")
