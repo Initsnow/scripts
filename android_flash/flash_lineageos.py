@@ -7,7 +7,7 @@ import requests
 import subprocess
 from bs4 import BeautifulSoup
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
 
 
 def run(command):
