@@ -38,13 +38,16 @@ def parse_releases_api(url):
     else:
         for i in latest_res:
             name = i["name"]
-            if "arm64" in name and ".apk" in name:
+            if "arm64" in name and name.endswith(".apk"):
                 logging.debug(f"has arm64: {name}")
                 return i["browser_download_url"]
             elif "release" in name:
                 logging.debug(f"has release: {name}")
                 return i["browser_download_url"]
-    return None
+            elif name.endswith(".apk"):
+                logging.debug(f"endswith .apk: {name}")
+                return i["browser_download_url"]
+    raise Exception(f"Can't parse {url}")
 
 
 def main(
