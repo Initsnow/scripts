@@ -41,18 +41,14 @@ def process_markdown_file(markdown_path, vault_path, attachments_folder="attachm
     markdown_dir = markdown_path.parent
     dest_dir = markdown_dir / attachments_folder
 
-    # 2. 创建目标文件夹 (如果不存在)
-    dest_dir.mkdir(exist_ok=True)
-    print(f"📁 确保附件文件夹存在: {dest_dir}")
-
-    # 3. 读取 Markdown 文件内容
+    # 2. 读取 Markdown 文件内容
     try:
         content = markdown_path.read_text(encoding='utf-8')
     except Exception as e:
         print(f"❌ 读取文件时出错 {markdown_path}: {e}")
         return
 
-    # 4. 查找所有 [[...]] 格式的链接中的文件名部分
+    # 3. 查找所有 [[...]] 格式的链接中的文件名部分
     # 这个正则表达式可以正确提取文件名，无论链接是否带别名或指向标题
     wikilinks = re.findall(r'!*\[\[([^|\]#]+)', content)
     
@@ -64,8 +60,9 @@ def process_markdown_file(markdown_path, vault_path, attachments_folder="attachm
 
     updated_content = content
     files_moved_count = 0
+    folder_created = False # 用于跟踪文件夹是否已创建的标志
 
-    # 5. 遍历并处理每个链接
+    # 4. 遍历并处理每个链接
     for link_name in set(wikilinks):
         link_name = link_name.strip() # 去除可能存在的前后空格
 
@@ -92,34 +89,31 @@ def process_markdown_file(markdown_path, vault_path, attachments_folder="attachm
             print(f"✅ 文件 '{link_name}' 已在目标位置，跳过。")
             continue
 
-        # 定义新路径并移动文件
+        # 定义新路径
         dest_path = dest_dir / source_path.name
         
         try:
+            # 只有在确定要移动第一个文件时才创建附件文件夹
+            if not folder_created:
+                print(f"📁 检测到需要移动的附件，创建文件夹: {dest_dir}")
+                dest_dir.mkdir(exist_ok=True)
+                folder_created = True
+
             print(f"🚀 正在移动: '{source_path}' -> '{dest_path}'")
             shutil.move(source_path, dest_path)
             files_moved_count += 1
 
             # --- 更新链接的核心逻辑 ---
-            # 这个更强大的正则表达式会处理带有别名(|)、标题链接(#)或嵌入格式(!)的情况。
-            # !? 使得链接开头的感叹号成为可选匹配项，并将其包含在第一个捕获组中。
-            # (?=[|\]#]) 是一个正向预查，确保文件名后是 |、] 或 #，但不会消耗这些字符。
             escaped_link = re.escape(link_name)
             pattern = re.compile(r'(!?\[\[)(' + escaped_link + r')(?=[|\]#])')
-            
-            # 使用 f-string 和原始字符串(r'...')来构建替换字符串
-            # \g<1> 代表第一个捕获组 `(!?\[\[)`
-            # \g<2> 代表第二个捕获组 `(escaped_link)`
             replacement_string = rf'\g<1>{attachments_folder}/\g<2>'
-            
-            # 执行替换
             updated_content = pattern.sub(replacement_string, updated_content)
             print(f"✍️  已更新链接，将 '{link_name}' 指向 '{attachments_folder}' 文件夹。")
 
         except Exception as e:
             print(f"❌ 移动文件 '{source_path}' 时出错: {e}")
 
-    # 6. 将更新后的内容写回文件
+    # 5. 将更新后的内容写回文件
     if content != updated_content:
         try:
             markdown_path.write_text(updated_content, encoding='utf-8')
@@ -127,7 +121,10 @@ def process_markdown_file(markdown_path, vault_path, attachments_folder="attachm
         except Exception as e:
             print(f"❌ 保存文件 {markdown_path.name} 时出错: {e}")
     
-    print(f"✨ 处理完成！共移动了 {files_moved_count} 个文件。")
+    if files_moved_count > 0:
+        print(f"✨ 处理完成！共移动了 {files_moved_count} 个文件。")
+    else:
+        print("✨ 处理完成！没有文件被移动。")
 
 
 def main():
