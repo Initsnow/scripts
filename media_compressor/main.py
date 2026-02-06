@@ -41,6 +41,19 @@ def get_duration(input_file):
     except Exception:
         return None
 
+def get_video_codec(input_file):
+    """Get video codec name using ffprobe."""
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=codec_name",
+        "-of", "default=noprint_wrappers=1:nokey=1", str(input_file)
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        return result.stdout.strip().lower()
+    except Exception:
+        return None
+
 def convert_time_to_seconds(time_str):
     """Convert HH:MM:SS.ms to seconds."""
     try:
@@ -115,6 +128,19 @@ def process_video(in_file, input_base_path, output_base_path, crf, preset, delet
 
     if out_file.exists():
         # console.print(f"[yellow]Skipping {in_file.name} (Output exists)[/yellow]")
+        return
+
+    # Check if video is already using an efficient codec (AV1 or H.265/HEVC)
+    codec = get_video_codec(in_file)
+    if codec in ['hevc', 'h265', 'av1']:
+        progress.console.print(f"[bold blue]⊘ Skipping {in_file.name} (Already {codec.upper()} encoded)[/bold blue]")
+        # Update global progress if applicable
+        if global_mode == "count":
+            progress.advance(total_task_id, advance=1)
+        elif global_mode == "time":
+            duration = get_duration(in_file)
+            if duration:
+                progress.advance(total_task_id, advance=duration)
         return
 
     temp_out_file = out_file.with_suffix('.mp4.part')

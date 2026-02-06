@@ -7,6 +7,7 @@ Optimizes your media library to save space while maintaining high visual quality
 
 ### 🎥 Video Compression
 - **High Efficiency**: Uses **H.265 (HEVC)** for maximum compression.
+- **Smart Codec Detection**: Automatically **skips re-encoding** videos already using efficient codecs (AV1, H.265/HEVC).
 - **Hardware Acceleration**: Automatic **NVIDIA GPU (NVENC)** detection and usage.
 - **Hybrid Processing**: Supports simultaneous CPU and GPU workers for maximum throughput.
 - **Smart Quality**: Configurable CRF (Constant Rate Factor) and Presets.
