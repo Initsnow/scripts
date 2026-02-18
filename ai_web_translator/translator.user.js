@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Web Translator
 // @namespace    http://tampermonkey.net/
-// @version      0.21
+// @version      0.22
 // @description  Translate webpage content in-place using AI (DeepSeek and more in future). Smart caching, accessible styles, and automation.
 // @author       Antigravity
 // @match        *://*/*
@@ -612,6 +612,7 @@ Input JSON:`
             }
 
             let validCount = 0;
+            const cacheItems = []; // Collect successful translations for cache
             batch.forEach((b) => {
                 const target = task.blocks[b._index];
                 if (!target) return;
@@ -619,6 +620,8 @@ Input JSON:`
                 if (transMap.has(b._index)) {
                     target.translation = transMap.get(b._index);
                     validCount++;
+                    // Queue for cache write (keyed by source text, cross-page)
+                    cacheItems.push({ text: b.text, trans: target.translation });
                 } else {
                     // If ID not found, maybe model failed to return it.
                     // Don't mark as error immediately? Or mark as missing?
@@ -626,6 +629,11 @@ Input JSON:`
                     target.translation = "[Trans Missing]";
                 }
             });
+
+            // Persist translations to cache so other pages with same text skip AI
+            if (cacheItems.length > 0) {
+                CM.setBatch(cacheItems);
+            }
 
             GM_setValue('ds_task', task);
 
