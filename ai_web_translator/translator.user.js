@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Web Translator
 // @namespace    http://tampermonkey.net/
-// @version      0.22
+// @version      0.23
 // @description  Translate webpage content in-place using AI (DeepSeek and more in future). Smart caching, accessible styles, and automation.
 // @author       Antigravity
 // @match        *://*/*
@@ -311,7 +311,16 @@ Input JSON:`
         ensureFloatingControls();
 
         if (pendingCount > 0) {
-            GM_openInTab('https://chat.deepseek.com/', { active: true });
+            // Only open a new DeepSeek tab if no existing one is actively handling tasks
+            const prevTask = GM_getValue('ds_task');
+            const hasActiveHandler = prevTask &&
+                prevTask.handlerId &&
+                prevTask.lastHeartbeat &&
+                (Date.now() - prevTask.lastHeartbeat) < HEARTBEAT_TIMEOUT;
+
+            if (!hasActiveHandler) {
+                GM_openInTab('https://chat.deepseek.com/', { active: true });
+            }
             showToast(`Task started! ${blocks.length} blocks (${pendingCount} new).`);
         } else {
             showToast(`Loaded ${blocks.length} translations from cache!`);
