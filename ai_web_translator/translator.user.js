@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Web Translator
 // @namespace    http://tampermonkey.net/
-// @version      0.25
+// @version      0.26
 // @description  Translate webpage content in-place using AI (DeepSeek and more in future). Smart caching, accessible styles, and automation.
 // @author       Antigravity
 // @match        *://*/*
@@ -778,7 +778,7 @@ Input JSON:`
 
                 <div class="ds-toggle-row">
                     <input type="checkbox" id="ds-set-deepthink" ${settings.enableDeepThink ? 'checked' : ''}>
-                    <label for="ds-set-deepthink" style="margin:0">Enable DeepThink (R1)</label>
+                    <label for="ds-set-deepthink" style="margin:0">Enable DeepThink</label>
                 </div>
                 <div class="ds-toggle-row">
                     <input type="checkbox" id="ds-set-search" ${settings.enableSearch ? 'checked' : ''}>
@@ -895,11 +895,16 @@ Input JSON:`
             showToast(`Replaced in ${count} item(s). Click Save All to apply.`);
         };
 
+        // Hide floating controls while editor is open
+        const controls = document.getElementById('ds-controls');
+        if (controls) controls.style.display = 'none';
+        const restoreControls = () => { if (controls) controls.style.display = ''; };
+
         // Close
         overlay.addEventListener('click', (e) => {
-            if (e.target === overlay) overlay.remove();
+            if (e.target === overlay) { overlay.remove(); restoreControls(); }
         });
-        document.getElementById('ds-bulk-cancel').onclick = () => overlay.remove();
+        document.getElementById('ds-bulk-cancel').onclick = () => { overlay.remove(); restoreControls(); };
 
         // Save All
         document.getElementById('ds-bulk-save').onclick = () => {
@@ -925,6 +930,7 @@ Input JSON:`
             }
 
             overlay.remove();
+            restoreControls();
 
             // Refresh in-page translations
             freshTask.blocks.forEach(block => {
