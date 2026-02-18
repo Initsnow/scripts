@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Web Translator
 // @namespace    http://tampermonkey.net/
-// @version      0.23
+// @version      0.24
 // @description  Translate webpage content in-place using AI (DeepSeek and more in future). Smart caching, accessible styles, and automation.
 // @author       Antigravity
 // @match        *://*/*
@@ -110,6 +110,135 @@
             padding: 0;
             margin: 0;
             width: 100%;
+        }
+
+        /* Inline Edit */
+        .ds-trans-node {
+            cursor: default;
+        }
+        .ds-trans-node:hover {
+            outline: 2px dashed rgba(100, 100, 255, 0.4);
+            outline-offset: 2px;
+        }
+        .ds-trans-node--editing {
+            outline: 2px solid #4a90d9 !important;
+            outline-offset: 2px;
+        }
+        .ds-trans-node--editing textarea {
+            width: 100%;
+            min-height: 60px;
+            padding: 8px;
+            border: none;
+            background: transparent;
+            color: inherit;
+            font: inherit;
+            line-height: inherit;
+            resize: vertical;
+            outline: none;
+        }
+        .ds-edit-hint {
+            font-size: 11px;
+            opacity: 0.6;
+            margin-top: 4px;
+            font-style: italic;
+        }
+
+        /* Settings Modal */
+        .ds-settings-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 2147483646;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ds-settings-modal {
+            background: #fff;
+            color: #222;
+            border-radius: 12px;
+            padding: 24px;
+            width: 520px;
+            max-width: 90vw;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            font-family: -apple-system, sans-serif;
+        }
+        .ds-settings-modal h2 {
+            margin: 0 0 16px;
+            font-size: 18px;
+        }
+        .ds-settings-modal label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            margin: 12px 0 4px;
+        }
+        .ds-settings-modal textarea {
+            width: 100%;
+            min-height: 140px;
+            padding: 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-family: monospace;
+            font-size: 12px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+        .ds-settings-modal .ds-toggle-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 8px 0;
+        }
+        .ds-settings-modal .ds-toggle-row input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+        }
+        .ds-settings-btns {
+            display: flex;
+            gap: 8px;
+            margin-top: 20px;
+            justify-content: flex-end;
+        }
+        .ds-settings-btns button {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid #ccc;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .ds-settings-btns .ds-btn-primary {
+            background: #4a90d9;
+            color: #fff;
+            border-color: #4a90d9;
+        }
+        .ds-settings-btns .ds-btn-danger {
+            background: none;
+            color: #d9534f;
+            border-color: #d9534f;
+        }
+        @media (prefers-color-scheme: dark) {
+            .ds-settings-modal {
+                background: #1e1e1e;
+                color: #e0e0e0;
+            }
+            .ds-settings-modal textarea {
+                background: #2a2a2a;
+                color: #e0e0e0;
+                border-color: #444;
+            }
+            .ds-settings-btns button {
+                background: #333;
+                color: #e0e0e0;
+                border-color: #555;
+            }
+            .ds-settings-btns .ds-btn-primary {
+                background: #4a90d9;
+                color: #fff;
+            }
         }
     `);
 
@@ -250,8 +379,10 @@ Input JSON:`
         GM_registerMenuCommand("🚀 Translate (In-Place)", startTranslation);
         GM_registerMenuCommand("❌ Reset Task", clearTask);
         GM_registerMenuCommand("🧹 Clear Cache", () => CM.clear());
+        GM_registerMenuCommand("⚙️ Settings", openSettings);
 
         setInterval(checkTaskUpdates, 1500);
+        setupInlineEdit();
 
         const task = GM_getValue('ds_task');
         if (task && task.url === window.location.href) {
@@ -390,6 +521,138 @@ Input JSON:`
 
             el.after(transEl);
         }
+    }
+
+    // --- Inline Edit ---
+    function setupInlineEdit() {
+        document.addEventListener('dblclick', (e) => {
+            const transEl = e.target.closest('.ds-trans-node');
+            if (!transEl || transEl.classList.contains('ds-trans-node--editing')) return;
+
+            const originalText = transEl.innerText;
+            transEl.classList.add('ds-trans-node--editing');
+
+            const textarea = document.createElement('textarea');
+            textarea.value = originalText;
+            const hint = document.createElement('div');
+            hint.className = 'ds-edit-hint';
+            hint.textContent = 'Enter 保存 · Esc 取消';
+
+            transEl.textContent = '';
+            transEl.appendChild(textarea);
+            transEl.appendChild(hint);
+            textarea.focus();
+
+            // Auto-resize
+            textarea.style.height = textarea.scrollHeight + 'px';
+
+            const finish = (save) => {
+                const newText = textarea.value.trim();
+                transEl.classList.remove('ds-trans-node--editing');
+                transEl.textContent = save && newText ? newText : originalText;
+
+                if (save && newText && newText !== originalText) {
+                    // Find the source element (previous sibling with data-ds-hash)
+                    const srcEl = transEl.previousElementSibling;
+                    if (srcEl && srcEl.dataset.dsHash) {
+                        const hash = srcEl.dataset.dsHash;
+                        const srcText = srcEl.innerText.trim();
+
+                        // Update task in GM storage
+                        const task = GM_getValue('ds_task');
+                        if (task) {
+                            const block = task.blocks.find(b => b.hash === hash);
+                            if (block) {
+                                block.translation = newText;
+                                GM_setValue('ds_task', task);
+                            }
+                        }
+
+                        // Update cache
+                        CM.set(srcText, newText);
+                    }
+                }
+            };
+
+            textarea.addEventListener('keydown', (ev) => {
+                if (ev.key === 'Enter' && !ev.shiftKey) {
+                    ev.preventDefault();
+                    finish(true);
+                } else if (ev.key === 'Escape') {
+                    ev.preventDefault();
+                    finish(false);
+                }
+            });
+
+            // Click outside to cancel
+            const outsideHandler = (ev) => {
+                if (!transEl.contains(ev.target)) {
+                    finish(false);
+                    document.removeEventListener('mousedown', outsideHandler, true);
+                }
+            };
+            setTimeout(() => document.addEventListener('mousedown', outsideHandler, true), 0);
+        });
+    }
+
+    // --- Settings ---
+    function openSettings() {
+        if (document.querySelector('.ds-settings-overlay')) return;
+
+        const settings = getSettings();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'ds-settings-overlay';
+        overlay.innerHTML = `
+            <div class="ds-settings-modal">
+                <h2>⚙️ Translator Settings</h2>
+
+                <label for="ds-set-prompt">Translation Prompt</label>
+                <textarea id="ds-set-prompt">${settings.promptPrefix || DEFAULTS.promptPrefix}</textarea>
+
+                <div class="ds-toggle-row">
+                    <input type="checkbox" id="ds-set-deepthink" ${settings.enableDeepThink ? 'checked' : ''}>
+                    <label for="ds-set-deepthink" style="margin:0">Enable DeepThink (R1)</label>
+                </div>
+                <div class="ds-toggle-row">
+                    <input type="checkbox" id="ds-set-search" ${settings.enableSearch ? 'checked' : ''}>
+                    <label for="ds-set-search" style="margin:0">Enable Search</label>
+                </div>
+
+                <div class="ds-settings-btns">
+                    <button class="ds-btn-danger" id="ds-set-reset">Reset Defaults</button>
+                    <button id="ds-set-cancel">Cancel</button>
+                    <button class="ds-btn-primary" id="ds-set-save">Save</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Close on overlay background click
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+
+        document.getElementById('ds-set-cancel').onclick = () => overlay.remove();
+
+        document.getElementById('ds-set-save').onclick = () => {
+            const newSettings = {
+                maxContext: settings.maxContext || DEFAULTS.maxContext,
+                promptPrefix: document.getElementById('ds-set-prompt').value,
+                enableDeepThink: document.getElementById('ds-set-deepthink').checked,
+                enableSearch: document.getElementById('ds-set-search').checked
+            };
+            GM_setValue('ds_settings', newSettings);
+            overlay.remove();
+            showToast('Settings saved!');
+        };
+
+        document.getElementById('ds-set-reset').onclick = () => {
+            document.getElementById('ds-set-prompt').value = DEFAULTS.promptPrefix;
+            document.getElementById('ds-set-deepthink').checked = DEFAULTS.enableDeepThink;
+            document.getElementById('ds-set-search').checked = DEFAULTS.enableSearch;
+            showToast('Reset to defaults (click Save to confirm)');
+        };
     }
 
     // --- DeepSeek Automation ---
