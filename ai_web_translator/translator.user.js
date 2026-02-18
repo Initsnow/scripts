@@ -384,6 +384,9 @@ Input JSON:`
     }
 
     // --- DeepSeek Automation ---
+    const DS_TAB_ID = 'ds_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const HEARTBEAT_TIMEOUT = 10000; // 10 seconds — if handler doesn't heartbeat, another tab can take over
+
     function handleDeepSeek() {
         setInterval(async () => {
             const task = GM_getValue('ds_task');
@@ -403,10 +406,31 @@ Input JSON:`
                 return;
             }
 
+            // --- Cross-tab lock: only one DeepSeek tab should process ---
+            const now = Date.now();
+            if (task.handlerId && task.handlerId !== DS_TAB_ID) {
+                // Another tab claimed this task — check if it's still alive
+                if (task.lastHeartbeat && (now - task.lastHeartbeat) < HEARTBEAT_TIMEOUT) {
+                    // Handler is alive, show status and skip
+                    if (monitorStatus) {
+                        monitorStatus.textContent = 'Another tab is handling this task.';
+                        monitorStatus.style.color = '#facc15'; // Yellow
+                    }
+                    return;
+                }
+                // Handler is stale, take over
+                console.log(`[DS Translator] Handler ${task.handlerId} stale, tab ${DS_TAB_ID} taking over.`);
+            }
+
+            // Claim ownership & heartbeat
+            task.handlerId = DS_TAB_ID;
+            task.lastHeartbeat = now;
+            GM_setValue('ds_task', task);
+
             const textarea = document.querySelector('textarea#chat-input, textarea');
             if (!textarea) return;
 
-            // Check if we are busy
+            // Check if we are busy (local DOM state for send-in-progress)
             if (monitorStatus && monitorStatus.dataset.state === 'busy') return;
 
             // Find next batch
