@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         AI Web Translator
 // @namespace    http://tampermonkey.net/
-// @version      0.24
+// @version      0.25
 // @description  Translate webpage content in-place using AI (DeepSeek and more in future). Smart caching, accessible styles, and automation.
 // @author       Antigravity
 // @match        *://*/*
@@ -240,6 +240,171 @@
                 color: #fff;
             }
         }
+
+        /* Bulk Editor */
+        .ds-bulk-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 2147483646;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .ds-bulk-modal {
+            background: #fff;
+            color: #222;
+            border-radius: 12px;
+            padding: 24px;
+            width: 900px;
+            max-width: 95vw;
+            max-height: 85vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            font-family: -apple-system, sans-serif;
+        }
+        .ds-bulk-modal h2 {
+            margin: 0 0 12px;
+            font-size: 18px;
+            flex-shrink: 0;
+        }
+        .ds-bulk-toolbar {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            flex-shrink: 0;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .ds-bulk-toolbar input {
+            padding: 6px 10px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            font-size: 13px;
+            flex: 1;
+            min-width: 120px;
+        }
+        .ds-bulk-toolbar button {
+            padding: 6px 12px;
+            border: 1px solid #ccc;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .ds-bulk-list {
+            flex: 1;
+            overflow-y: auto;
+            border: 1px solid #eee;
+            border-radius: 6px;
+        }
+        .ds-bulk-row {
+            display: flex;
+            border-bottom: 1px solid #f0f0f0;
+            align-items: stretch;
+        }
+        .ds-bulk-row:last-child {
+            border-bottom: none;
+        }
+        .ds-bulk-row:hover {
+            background: #f8f9fa;
+        }
+        .ds-bulk-row.ds-bulk-row--hidden {
+            display: none;
+        }
+        .ds-bulk-idx {
+            width: 40px;
+            padding: 8px;
+            font-size: 11px;
+            color: #999;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-shrink: 0;
+        }
+        .ds-bulk-src {
+            flex: 1;
+            padding: 8px;
+            font-size: 12px;
+            line-height: 1.5;
+            border-right: 1px solid #f0f0f0;
+            color: #555;
+            word-break: break-word;
+            min-width: 0;
+        }
+        .ds-bulk-trans {
+            flex: 1;
+            padding: 0;
+            min-width: 0;
+        }
+        .ds-bulk-trans textarea {
+            width: 100%;
+            height: 100%;
+            min-height: 50px;
+            padding: 8px;
+            border: none;
+            background: transparent;
+            font-size: 12px;
+            line-height: 1.5;
+            resize: none;
+            box-sizing: border-box;
+            font-family: inherit;
+        }
+        .ds-bulk-trans textarea:focus {
+            background: #fffde7;
+            outline: none;
+        }
+        .ds-bulk-footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 12px;
+            flex-shrink: 0;
+        }
+        .ds-bulk-footer .ds-bulk-count {
+            font-size: 12px;
+            color: #888;
+        }
+        .ds-bulk-footer .ds-settings-btns {
+            margin-top: 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            .ds-bulk-modal {
+                background: #1e1e1e;
+                color: #e0e0e0;
+            }
+            .ds-bulk-toolbar input {
+                background: #2a2a2a;
+                color: #e0e0e0;
+                border-color: #444;
+            }
+            .ds-bulk-toolbar button {
+                background: #333;
+                color: #e0e0e0;
+                border-color: #555;
+            }
+            .ds-bulk-list {
+                border-color: #333;
+            }
+            .ds-bulk-row {
+                border-bottom-color: #333;
+            }
+            .ds-bulk-row:hover {
+                background: #2a2a2a;
+            }
+            .ds-bulk-src {
+                border-right-color: #333;
+                color: #aaa;
+            }
+            .ds-bulk-trans textarea {
+                color: #e0e0e0;
+            }
+            .ds-bulk-trans textarea:focus {
+                background: #2a2a1a;
+            }
+        }
     `);
 
     // --- Configuration ---
@@ -377,6 +542,7 @@ Input JSON:`
     // --- Source Page ---
     function handleSourcePage() {
         GM_registerMenuCommand("🚀 Translate (In-Place)", startTranslation);
+        GM_registerMenuCommand("✏️ Edit All Translations", openBulkEditor);
         GM_registerMenuCommand("❌ Reset Task", clearTask);
         GM_registerMenuCommand("🧹 Clear Cache", () => CM.clear());
         GM_registerMenuCommand("⚙️ Settings", openSettings);
@@ -652,6 +818,123 @@ Input JSON:`
             document.getElementById('ds-set-deepthink').checked = DEFAULTS.enableDeepThink;
             document.getElementById('ds-set-search').checked = DEFAULTS.enableSearch;
             showToast('Reset to defaults (click Save to confirm)');
+        };
+    }
+
+    // --- Bulk Editor ---
+    function openBulkEditor() {
+        if (document.querySelector('.ds-bulk-overlay')) return;
+
+        const task = GM_getValue('ds_task');
+        if (!task || !task.blocks || task.blocks.length === 0) {
+            showToast('No translations to edit. Run a translation first.');
+            return;
+        }
+
+        const overlay = document.createElement('div');
+        overlay.className = 'ds-bulk-overlay';
+
+        // Build rows HTML
+        const rowsHtml = task.blocks.map((block, i) => {
+            const src = block.text.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            const trans = (block.translation || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+            return `
+                <div class="ds-bulk-row" data-idx="${i}">
+                    <div class="ds-bulk-idx">${i + 1}</div>
+                    <div class="ds-bulk-src">${src}</div>
+                    <div class="ds-bulk-trans">
+                        <textarea data-bulk-idx="${i}">${trans}</textarea>
+                    </div>
+                </div>`;
+        }).join('');
+
+        overlay.innerHTML = `
+            <div class="ds-bulk-modal">
+                <h2>✏️ Edit All Translations (${task.blocks.length})</h2>
+                <div class="ds-bulk-toolbar">
+                    <input type="text" id="ds-bulk-search" placeholder="Search / filter...">
+                    <input type="text" id="ds-bulk-find" placeholder="Find">
+                    <input type="text" id="ds-bulk-replace" placeholder="Replace with">
+                    <button id="ds-bulk-replace-btn">Replace All</button>
+                </div>
+                <div class="ds-bulk-list">${rowsHtml}</div>
+                <div class="ds-bulk-footer">
+                    <span class="ds-bulk-count">${task.blocks.length} items</span>
+                    <div class="ds-settings-btns">
+                        <button id="ds-bulk-cancel">Cancel</button>
+                        <button class="ds-btn-primary" id="ds-bulk-save">Save All</button>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(overlay);
+
+        // Search / Filter
+        document.getElementById('ds-bulk-search').addEventListener('input', (e) => {
+            const q = e.target.value.toLowerCase();
+            overlay.querySelectorAll('.ds-bulk-row').forEach(row => {
+                const src = row.querySelector('.ds-bulk-src').textContent.toLowerCase();
+                const trans = row.querySelector('textarea').value.toLowerCase();
+                row.classList.toggle('ds-bulk-row--hidden', q && !src.includes(q) && !trans.includes(q));
+            });
+        });
+
+        // Find & Replace
+        document.getElementById('ds-bulk-replace-btn').onclick = () => {
+            const findVal = document.getElementById('ds-bulk-find').value;
+            const replaceVal = document.getElementById('ds-bulk-replace').value;
+            if (!findVal) return;
+
+            let count = 0;
+            overlay.querySelectorAll('.ds-bulk-trans textarea').forEach(ta => {
+                if (ta.value.includes(findVal)) {
+                    ta.value = ta.value.replaceAll(findVal, replaceVal);
+                    count++;
+                }
+            });
+            showToast(`Replaced in ${count} item(s). Click Save All to apply.`);
+        };
+
+        // Close
+        overlay.addEventListener('click', (e) => {
+            if (e.target === overlay) overlay.remove();
+        });
+        document.getElementById('ds-bulk-cancel').onclick = () => overlay.remove();
+
+        // Save All
+        document.getElementById('ds-bulk-save').onclick = () => {
+            const freshTask = GM_getValue('ds_task');
+            if (!freshTask) { overlay.remove(); return; }
+
+            const cacheItems = [];
+            overlay.querySelectorAll('.ds-bulk-trans textarea').forEach(ta => {
+                const idx = parseInt(ta.dataset.bulkIdx, 10);
+                const newTrans = ta.value.trim();
+                const block = freshTask.blocks[idx];
+                if (block && newTrans !== (block.translation || '')) {
+                    block.translation = newTrans;
+                    cacheItems.push({ text: block.text, trans: newTrans });
+                }
+            });
+
+            GM_setValue('ds_task', freshTask);
+
+            // Update cache in batch
+            if (cacheItems.length > 0) {
+                CM.setBatch(cacheItems);
+            }
+
+            overlay.remove();
+
+            // Refresh in-page translations
+            freshTask.blocks.forEach(block => {
+                if (block.translation) {
+                    const transEl = document.querySelector(`[data-ds-hash="${block.hash}"] + .ds-trans-node`);
+                    if (transEl) transEl.innerText = block.translation;
+                }
+            });
+
+            showToast(`Saved ${cacheItems.length} change(s)!`);
         };
     }
 
@@ -950,6 +1233,9 @@ Input JSON:`
                  <p id="ds-status">Ready</p>
             </div>
             <div class="ds-ctrl-row">
+                 <button class="ds-btn" id="ds-edit-all">✏️ Edit All</button>
+            </div>
+            <div class="ds-ctrl-row">
                  <button class="ds-btn" id="ds-toggle-orig">Toggle Orig</button>
             </div>
             <div class="ds-ctrl-row">
@@ -973,6 +1259,7 @@ Input JSON:`
             els.forEach(elem => elem.style.display = isHidden ? '' : 'none');
             e.target.style.opacity = isHidden ? '1' : '0.5';
         };
+        document.getElementById('ds-edit-all').onclick = () => openBulkEditor();
     }
 
     function updateFloatingStatus(text) {
