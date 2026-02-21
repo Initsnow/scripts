@@ -12,8 +12,7 @@
 // @grant        GM_addStyle
 // ==/UserScript==
 
-(function () {
-    'use strict';
+(() => {
 
     // --- Styles ---
     GM_addStyle(`
@@ -481,13 +480,11 @@ Input JSON:`
         prune: function (cache) {
             const now = Date.now();
             const keys = Object.keys(cache);
-            let modified = false;
 
             // 1. TTL Check
             keys.forEach(k => {
                 if (now - cache[k].ts > this.TTL) {
                     delete cache[k];
-                    modified = true;
                 }
             });
 
@@ -498,8 +495,7 @@ Input JSON:`
                 // This is expensive O(N log N), but runs locally.
                 const sorted = currentKeys.sort((a, b) => cache[a].ts - cache[b].ts);
                 const toRemove = sorted.slice(0, currentKeys.length - this.MAX_SIZE);
-                toRemove.forEach(k => delete cache[k]);
-                modified = true;
+                toRemove.forEach(k => { delete cache[k]; });
             }
         },
 
@@ -508,7 +504,7 @@ Input JSON:`
             alert("Cache cleared!");
         },
 
-        hash: function (str) {
+        hash: (str) => {
             // Simple hash for string keys
             let hash = 0, i, chr;
             if (str.length === 0) return hash;
@@ -562,11 +558,10 @@ Input JSON:`
     function startTranslation() {
         // ... (Scanning logic is same, just omitted for brevity in diff if not changed, but I need to inject Cache Check)
         // 1. Scan DOM
-        const excludeTags = ['SCRIPT', 'STYLE', 'NOSCRIPT', 'IFRAME', 'nav', 'footer', 'svg', 'path'];
         const blockTags = ['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'td', 'blockquote'];
 
         let blocks = [];
-        let candidates = document.querySelectorAll(blockTags.join(','));
+        const candidates = document.querySelectorAll(blockTags.join(','));
 
         candidates.forEach(el => {
             if (el.offsetParent === null) return;
@@ -613,9 +608,8 @@ Input JSON:`
         if (pendingCount > 0) {
             // Only open a new DeepSeek tab if no existing one is actively handling tasks
             const prevTask = GM_getValue('ds_task');
-            const hasActiveHandler = prevTask &&
-                prevTask.handlerId &&
-                prevTask.lastHeartbeat &&
+            const hasActiveHandler = prevTask?.handlerId &&
+                prevTask?.lastHeartbeat &&
                 (Date.now() - prevTask.lastHeartbeat) < HEARTBEAT_TIMEOUT;
 
             if (!hasActiveHandler) {
@@ -658,7 +652,7 @@ Input JSON:`
         // Resilience: finding element
         if (!el) {
             const candidates = document.querySelectorAll(`${block.hash.split(':')[0]}`);
-            for (let c of candidates) {
+            for (const c of candidates) {
                 const h = `${c.tagName}:${c.innerText.trim().length}:${c.innerText.trim().slice(0, 20).replace(/\s/g, '')}`;
                 if (h === block.hash) {
                     el = c;
@@ -680,7 +674,7 @@ Input JSON:`
                 const settings = getSettings();
                 const computed = window.getComputedStyle(el);
 
-                if (settings && settings.preserveOriginalStyle) {
+                if (settings?.preserveOriginalStyle) {
                     transEl.style.fontSize = computed.fontSize;
                     transEl.style.lineHeight = computed.lineHeight;
                     transEl.style.fontFamily = computed.fontFamily;
@@ -712,7 +706,7 @@ Input JSON:`
                     transEl.style.marginTop = "0px";
                     transEl.style.marginBottom = computed.marginBottom;
                 }
-            } catch (e) { }
+            } catch (_) { }
 
             el.after(transEl);
         }
@@ -1105,7 +1099,7 @@ Input JSON:`
         }
     }
 
-    function sendBatch(batch, textarea, startIndex, isInitialized) {
+    function sendBatch(batch, textarea, _startIndex, isInitialized) {
         const monitorStatus = document.querySelector('#ds-monitor-status');
         if (monitorStatus) {
             monitorStatus.dataset.state = 'busy';
@@ -1144,7 +1138,7 @@ Input JSON:`
     function waitForResponse(batch) {
         let checkCount = 0;
         let lastText = "";
-        let startTime = Date.now();
+        const startTime = Date.now();
 
         const poller = setInterval(() => {
             if (Date.now() - startTime > 120000) { // 2 mins timeout
@@ -1290,14 +1284,14 @@ Input JSON:`
             const els = document.querySelectorAll(`[data-ds-hash]`);
             if (!els.length) return;
             const isHidden = els[0].style.display === 'none';
-            els.forEach(elem => elem.style.display = isHidden ? '' : 'none');
+            els.forEach(elem => { elem.style.display = isHidden ? '' : 'none'; });
             e.target.style.opacity = isHidden ? '1' : '0.5';
         };
         document.getElementById('ds-toggle-trans').onclick = (e) => {
             const els = document.querySelectorAll('.ds-trans-node');
             if (!els.length) return;
             const isHidden = els[0].style.display === 'none';
-            els.forEach(elem => elem.style.display = isHidden ? '' : 'none');
+            els.forEach(elem => { elem.style.display = isHidden ? '' : 'none'; });
             e.target.style.opacity = isHidden ? '1' : '0.5';
         };
         document.getElementById('ds-edit-all').onclick = () => openBulkEditor();
@@ -1315,7 +1309,7 @@ Input JSON:`
         }
     }
 
-    function createMonitor(task) {
+    function createMonitor(_task) {
         const div = document.createElement('div');
         div.id = 'ds-monitor';
         div.style.cssText = "position: fixed; bottom: 10px; right: 10px; width: 250px; background: rgba(0,0,0,0.8); color: white; padding: 10px; z-index: 99999;";
@@ -1323,7 +1317,7 @@ Input JSON:`
         document.body.appendChild(div);
     }
 
-    function updateMonitor(task) {
+    function updateMonitor(_task) {
         // Optional: show progress bar
     }
 
