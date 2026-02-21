@@ -412,6 +412,9 @@
         maxContext: 5000,
         enableDeepThink: true,
         enableSearch: false,
+                // If true, translation nodes will inherit original element's computed styles
+                // and appear visually identical to the source element (default: true)
+                preserveOriginalStyle: true,
         promptPrefix: `You are a professional translator. I will provide a JSON array of objects. 
 Each object has an "id" and "src" (source text).
 Translate the "src" into Chinese.
@@ -672,17 +675,43 @@ Input JSON:`
             transEl.className = 'ds-trans-node';
             transEl.innerText = block.translation;
 
-            // Clone Styles for seamless look
+            // Apply preserved-original-style if enabled in settings (inline styles override class rules)
             try {
+                const settings = getSettings();
                 const computed = window.getComputedStyle(el);
-                transEl.style.fontSize = computed.fontSize;
-                transEl.style.lineHeight = computed.lineHeight;
-                transEl.style.fontFamily = computed.fontFamily;
-                transEl.style.fontWeight = computed.fontWeight;
-                transEl.style.textAlign = computed.textAlign;
-                // Margins
-                transEl.style.marginTop = "0px"; // Tweak
-                transEl.style.marginBottom = computed.marginBottom;
+
+                if (settings && settings.preserveOriginalStyle) {
+                    transEl.style.fontSize = computed.fontSize;
+                    transEl.style.lineHeight = computed.lineHeight;
+                    transEl.style.fontFamily = computed.fontFamily;
+                    transEl.style.fontWeight = computed.fontWeight;
+                    transEl.style.textAlign = computed.textAlign;
+                    transEl.style.color = computed.color;
+                    transEl.style.backgroundColor = computed.backgroundColor;
+                    transEl.style.paddingTop = computed.paddingTop;
+                    transEl.style.paddingBottom = computed.paddingBottom;
+                    transEl.style.paddingLeft = computed.paddingLeft;
+                    transEl.style.paddingRight = computed.paddingRight;
+                    // Do NOT copy border styles from original element — force no border for translation node
+                    transEl.style.border = 'none';
+                    // Remove box-shadow and outline to avoid original decorations
+                    transEl.style.boxShadow = 'none';
+                    transEl.style.outline = 'none';
+                    transEl.style.marginTop = computed.marginTop;
+                    transEl.style.marginBottom = computed.marginBottom;
+                    transEl.style.display = computed.display;
+                    transEl.style.whiteSpace = computed.whiteSpace;
+                    transEl.style.wordBreak = computed.wordBreak || 'break-word';
+                } else {
+                    // Fallback: copy essential typography for readability while keeping ds-trans-node styling
+                    transEl.style.fontSize = computed.fontSize;
+                    transEl.style.lineHeight = computed.lineHeight;
+                    transEl.style.fontFamily = computed.fontFamily;
+                    transEl.style.fontWeight = computed.fontWeight;
+                    transEl.style.textAlign = computed.textAlign;
+                    transEl.style.marginTop = "0px";
+                    transEl.style.marginBottom = computed.marginBottom;
+                }
             } catch (e) { }
 
             el.after(transEl);
@@ -784,6 +813,10 @@ Input JSON:`
                     <input type="checkbox" id="ds-set-search" ${settings.enableSearch ? 'checked' : ''}>
                     <label for="ds-set-search" style="margin:0">Enable Search</label>
                 </div>
+                <div class="ds-toggle-row">
+                    <input type="checkbox" id="ds-set-preserve" ${settings.preserveOriginalStyle ? 'checked' : ''}>
+                    <label for="ds-set-preserve" style="margin:0">完全按原文样式显示 (Preserve original styling)</label>
+                </div>
 
                 <div class="ds-settings-btns">
                     <button class="ds-btn-danger" id="ds-set-reset">Reset Defaults</button>
@@ -806,7 +839,8 @@ Input JSON:`
                 maxContext: settings.maxContext || DEFAULTS.maxContext,
                 promptPrefix: document.getElementById('ds-set-prompt').value,
                 enableDeepThink: document.getElementById('ds-set-deepthink').checked,
-                enableSearch: document.getElementById('ds-set-search').checked
+                enableSearch: document.getElementById('ds-set-search').checked,
+                preserveOriginalStyle: document.getElementById('ds-set-preserve').checked
             };
             GM_setValue('ds_settings', newSettings);
             overlay.remove();
@@ -817,6 +851,7 @@ Input JSON:`
             document.getElementById('ds-set-prompt').value = DEFAULTS.promptPrefix;
             document.getElementById('ds-set-deepthink').checked = DEFAULTS.enableDeepThink;
             document.getElementById('ds-set-search').checked = DEFAULTS.enableSearch;
+            document.getElementById('ds-set-preserve').checked = DEFAULTS.preserveOriginalStyle;
             showToast('Reset to defaults (click Save to confirm)');
         };
     }
