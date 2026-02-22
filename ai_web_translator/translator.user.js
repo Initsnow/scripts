@@ -411,9 +411,9 @@
         maxContext: 5000,
         enableDeepThink: true,
         enableSearch: false,
-                // If true, translation nodes will inherit original element's computed styles
-                // and appear visually identical to the source element (default: true)
-                preserveOriginalStyle: true,
+        // If true, translation nodes will inherit original element's computed styles
+        // and appear visually identical to the source element (default: true)
+        preserveOriginalStyle: true,
         promptPrefix: `You are a professional translator. I will provide a JSON array of objects. 
 Each object has an "id" and "src" (source text).
 Translate the "src" into Chinese.
@@ -521,6 +521,10 @@ Input JSON:`
         return GM_getValue('ds_settings', DEFAULTS);
     }
 
+    // --- DeepSeek Constants ---
+    const DS_TAB_ID = 'ds_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    const HEARTBEAT_TIMEOUT = 10000; // 10 seconds — if handler doesn't heartbeat, another tab can take over
+
     // --- State Management ---
     // Task Structure:
     // {
@@ -591,14 +595,20 @@ Input JSON:`
         // Count pending
         const pendingCount = blocks.filter(b => !b.translation).length;
 
+        // Avoid opening a new tab if one is already active by checking prevTask before overwriting
+        const prevTask = GM_getValue('ds_task');
+        const hasActiveHandler = prevTask?.handlerId &&
+            prevTask?.lastHeartbeat &&
+            (Date.now() - prevTask.lastHeartbeat) < HEARTBEAT_TIMEOUT;
+
         const task = {
             id: Date.now(),
             url: window.location.href,
             blocks: blocks,
             status: pendingCount === 0 ? 'done' : 'pending',
             isInitialized: false,
-            handlerId: null,
-            lastHeartbeat: 0
+            handlerId: hasActiveHandler ? prevTask.handlerId : null,
+            lastHeartbeat: hasActiveHandler ? prevTask.lastHeartbeat : 0
         };
 
         GM_setValue('ds_task', task);
@@ -606,12 +616,6 @@ Input JSON:`
         ensureFloatingControls();
 
         if (pendingCount > 0) {
-            // Only open a new DeepSeek tab if no existing one is actively handling tasks
-            const prevTask = GM_getValue('ds_task');
-            const hasActiveHandler = prevTask?.handlerId &&
-                prevTask?.lastHeartbeat &&
-                (Date.now() - prevTask.lastHeartbeat) < HEARTBEAT_TIMEOUT;
-
             if (!hasActiveHandler) {
                 GM_openInTab('https://chat.deepseek.com/', { active: true });
             }
@@ -974,8 +978,6 @@ Input JSON:`
     }
 
     // --- DeepSeek Automation ---
-    const DS_TAB_ID = 'ds_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    const HEARTBEAT_TIMEOUT = 10000; // 10 seconds — if handler doesn't heartbeat, another tab can take over
 
     function handleDeepSeek() {
         setInterval(async () => {
@@ -990,8 +992,14 @@ Input JSON:`
 
             if (task.status === 'done') {
                 if (monitorStatus) {
-                    monitorStatus.textContent = "All batches completed successfully.";
-                    monitorStatus.style.color = '#4ade80'; // Green
+                    const errorCount = task.blocks.filter(b => b.translation && b.translation.startsWith('[')).length;
+                    if (errorCount > 0) {
+                        monitorStatus.textContent = `Completed with ${errorCount} errors/missing.`;
+                        monitorStatus.style.color = '#facc15'; // Yellow
+                    } else {
+                        monitorStatus.textContent = "All batches completed successfully.";
+                        monitorStatus.style.color = '#4ade80'; // Green
+                    }
                 }
                 return;
             }
@@ -1019,6 +1027,36 @@ Input JSON:`
 
             const textarea = document.querySelector('textarea#chat-input, textarea');
             if (!textarea) return;
+
+            // --- Chat Isolation Check ---
+            // We only want to send to:
+            // 1. An empty chat (no messages yet)
+            // 2. An existing translation chat (we look for our prompt signature)
+            const chatMessages = document.querySelectorAll('.ds-markdown');
+            if (chatMessages.length > 0) {
+                const firstUserMsg = document.querySelectorAll('.ds-markdown.ds-user-message, div[role="presentation"] .ds-markdown'); // Adjust selector as needed for user msgs
+                // A simpler heuristic: Check if the chat history contains our prompt prefix
+                const chatText = document.body.innerText;
+                const settings = getSettings();
+                // Use the first 30 chars of the user's custom prompt to identify our chat, rather than a hardcoded string
+                const promptSignature = settings.promptPrefix.substring(0, 30);
+
+                // If it's not empty, and doesn't look like our translation chat, create a new chat automatically
+                if (!chatText.includes(promptSignature)) {
+                    // We don't want to destroy the user's current reading/chatting experience.
+                    // Instead of clicking "New chat" here, we relinquish control and open a new tab.
+
+                    // 1. Release the lock so the new tab can take it
+                    task.handlerId = null;
+                    task.lastHeartbeat = 0;
+                    GM_setValue('ds_task', task);
+
+                    // 2. Open a strictly new tab in the background
+                    GM_openInTab('https://chat.deepseek.com/', { active: false });
+
+                    return; // Stop trying to send on this page
+                }
+            }
 
             // Check if we are busy (local DOM state for send-in-progress)
             if (monitorStatus && monitorStatus.dataset.state === 'busy') return;
@@ -1106,6 +1144,10 @@ Input JSON:`
             monitorStatus.textContent = `Processing items ${batch[0]._index} - ${batch[batch.length - 1]._index}...`;
         }
 
+        const initialMessages = document.querySelectorAll('.ds-markdown');
+        const initialCount = initialMessages.length;
+        const initialLastText = initialCount > 0 ? initialMessages[initialCount - 1].innerText : "";
+
         const settings = getSettings();
 
         // New Protocol: [{"id": 1, "src": "..."}]
@@ -1132,16 +1174,18 @@ Input JSON:`
             if (buttons.length > 0) buttons[buttons.length - 1].click();
         }, 800);
 
-        waitForResponse(batch);
+        waitForResponse(batch, initialCount, initialLastText);
     }
 
-    function waitForResponse(batch) {
+    function waitForResponse(batch, initialCount, initialLastText) {
         let checkCount = 0;
         let lastText = "";
-        const startTime = Date.now();
+        let lastActiveTime = Date.now();
+        const absoluteStartTime = Date.now();
 
         const poller = setInterval(() => {
-            if (Date.now() - startTime > 120000) { // 2 mins timeout
+            // Absolute timeout: 10 mins (600,000 ms) | Idle timeout: 2 mins (120,000 ms)
+            if (Date.now() - absoluteStartTime > 600000 || Date.now() - lastActiveTime > 120000) {
                 clearInterval(poller);
                 markBatchError(batch, "Timeout");
                 return;
@@ -1153,6 +1197,12 @@ Input JSON:`
 
             const currentText = lastMsg.innerText;
 
+            // Prevent premature parsing of previous response
+            if (messages.length === initialCount && currentText === initialLastText) {
+                lastActiveTime = Date.now(); // Reset idle timer while waiting in queue
+                return;
+            }
+
             // Guard
             if (currentText.includes('Input JSON:') || currentText.includes('Next batch (JSON Array):')) return;
             if (currentText.length < 5) return;
@@ -1162,9 +1212,10 @@ Input JSON:`
             } else {
                 checkCount = 0;
                 lastText = currentText;
+                lastActiveTime = Date.now(); // text is active
             }
 
-            if (checkCount > 4) {
+            if (checkCount > 8) { // 8 seconds of inactivity before parsing the response
                 clearInterval(poller);
                 parseResponse(currentText, batch);
             }
