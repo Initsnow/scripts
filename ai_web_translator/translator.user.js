@@ -984,6 +984,55 @@ Input JSON:`
             const task = GM_getValue('ds_task');
             if (!task) return;
 
+            // --- Chat Isolation Check ---
+            // We only want to send to:
+            // 1. An empty chat (no messages yet)
+            // 2. An existing translation chat (we look for our prompt signature)
+            const chatMessages = document.querySelectorAll('.ds-markdown');
+            if (chatMessages.length > 0) {
+                const normalizeText = (t) => t.replace(/\s+/g, '').toLowerCase();
+                const chatText = normalizeText(document.body.innerText);
+                const settings = getSettings();
+                // We use the first 30 chars of the custom prompt (normalized) as the signature
+                const promptSignature = normalizeText(settings.promptPrefix).slice(0, 30);
+
+                if (!chatText.includes(promptSignature)) {
+                    // This is a personal/unrelated chat. 
+                    // Release the lock if we hold it, and NEVER try to process.
+                    if (task.handlerId === DS_TAB_ID) {
+                        task.handlerId = null;
+                        task.lastHeartbeat = 0;
+                        GM_setValue('ds_task', task);
+                    }
+
+                    const el = document.querySelector('#ds-monitor-status');
+                    if (el) el.textContent = 'Unrelated chat. Ignoring task.';
+                    return;
+                }
+            }
+
+            // --- Cross-tab lock: only one DeepSeek tab should process ---
+            const now = Date.now();
+            if (task.handlerId && task.handlerId !== DS_TAB_ID) {
+                // Another tab claimed this task — check if it's still alive
+                if (task.lastHeartbeat && (now - task.lastHeartbeat) < HEARTBEAT_TIMEOUT) {
+                    // Handler is alive, show status and skip
+                    const monitorStatus = document.querySelector('#ds-monitor-status');
+                    if (monitorStatus) {
+                        monitorStatus.textContent = 'Another tab is handling this task.';
+                        monitorStatus.style.color = '#facc15'; // Yellow
+                    }
+                    return;
+                }
+                console.log(`[DS Translator] Handler ${task.handlerId} stale, tab ${DS_TAB_ID} taking over.`);
+            }
+
+            // Claim ownership & heartbeat!
+            // IMPORTANT: We do this even if the task is 'done' so the source page knows we are still alive!
+            task.handlerId = DS_TAB_ID;
+            task.lastHeartbeat = now;
+            GM_setValue('ds_task', task);
+
             // UI
             if (!document.querySelector('#ds-monitor')) createMonitor(task);
             updateMonitor(task);
@@ -997,66 +1046,16 @@ Input JSON:`
                         monitorStatus.textContent = `Completed with ${errorCount} errors/missing.`;
                         monitorStatus.style.color = '#facc15'; // Yellow
                     } else {
-                        monitorStatus.textContent = "All batches completed successfully.";
+                        monitorStatus.textContent = "All batches completed successfully. Ready for next task.";
                         monitorStatus.style.color = '#4ade80'; // Green
                     }
+                    monitorStatus.dataset.state = 'idle';
                 }
                 return;
             }
 
-            // --- Cross-tab lock: only one DeepSeek tab should process ---
-            const now = Date.now();
-            if (task.handlerId && task.handlerId !== DS_TAB_ID) {
-                // Another tab claimed this task — check if it's still alive
-                if (task.lastHeartbeat && (now - task.lastHeartbeat) < HEARTBEAT_TIMEOUT) {
-                    // Handler is alive, show status and skip
-                    if (monitorStatus) {
-                        monitorStatus.textContent = 'Another tab is handling this task.';
-                        monitorStatus.style.color = '#facc15'; // Yellow
-                    }
-                    return;
-                }
-                // Handler is stale, take over
-                console.log(`[DS Translator] Handler ${task.handlerId} stale, tab ${DS_TAB_ID} taking over.`);
-            }
-
-            // Claim ownership & heartbeat
-            task.handlerId = DS_TAB_ID;
-            task.lastHeartbeat = now;
-            GM_setValue('ds_task', task);
-
-            const textarea = document.querySelector('textarea#chat-input, textarea');
+            const textarea = document.querySelector('textarea#chat-input, textarea, div[contenteditable="true"]');
             if (!textarea) return;
-
-            // --- Chat Isolation Check ---
-            // We only want to send to:
-            // 1. An empty chat (no messages yet)
-            // 2. An existing translation chat (we look for our prompt signature)
-            const chatMessages = document.querySelectorAll('.ds-markdown');
-            if (chatMessages.length > 0) {
-                const firstUserMsg = document.querySelectorAll('.ds-markdown.ds-user-message, div[role="presentation"] .ds-markdown'); // Adjust selector as needed for user msgs
-                // A simpler heuristic: Check if the chat history contains our prompt prefix
-                const chatText = document.body.innerText;
-                const settings = getSettings();
-                // Use the first 30 chars of the user's custom prompt to identify our chat, rather than a hardcoded string
-                const promptSignature = settings.promptPrefix.substring(0, 30);
-
-                // If it's not empty, and doesn't look like our translation chat, create a new chat automatically
-                if (!chatText.includes(promptSignature)) {
-                    // We don't want to destroy the user's current reading/chatting experience.
-                    // Instead of clicking "New chat" here, we relinquish control and open a new tab.
-
-                    // 1. Release the lock so the new tab can take it
-                    task.handlerId = null;
-                    task.lastHeartbeat = 0;
-                    GM_setValue('ds_task', task);
-
-                    // 2. Open a strictly new tab in the background
-                    GM_openInTab('https://chat.deepseek.com/', { active: false });
-
-                    return; // Stop trying to send on this page
-                }
-            }
 
             // Check if we are busy (local DOM state for send-in-progress)
             if (monitorStatus && monitorStatus.dataset.state === 'busy') return;
@@ -1182,30 +1181,24 @@ Input JSON:`
         let lastText = "";
         let lastActiveTime = Date.now();
         const absoluteStartTime = Date.now();
+        let timeoutTimer = null;
 
-        const poller = setInterval(() => {
-            // Absolute timeout: 10 mins (600,000 ms) | Idle timeout: 2 mins (120,000 ms)
-            if (Date.now() - absoluteStartTime > 600000 || Date.now() - lastActiveTime > 120000) {
-                clearInterval(poller);
-                markBatchError(batch, "Timeout");
-                return;
-            }
-
+        const checkResponse = () => {
             const messages = document.querySelectorAll('.ds-markdown');
             const lastMsg = messages[messages.length - 1];
-            if (!lastMsg) return;
+            if (!lastMsg) return false;
 
             const currentText = lastMsg.innerText;
 
             // Prevent premature parsing of previous response
             if (messages.length === initialCount && currentText === initialLastText) {
                 lastActiveTime = Date.now(); // Reset idle timer while waiting in queue
-                return;
+                return false;
             }
 
             // Guard
-            if (currentText.includes('Input JSON:') || currentText.includes('Next batch (JSON Array):')) return;
-            if (currentText.length < 5) return;
+            if (currentText.includes('Input JSON:') || currentText.includes('Next batch (JSON Array):')) return false;
+            if (currentText.length < 5) return false;
 
             if (currentText === lastText) {
                 checkCount++;
@@ -1215,9 +1208,60 @@ Input JSON:`
                 lastActiveTime = Date.now(); // text is active
             }
 
-            if (checkCount > 8) { // 8 seconds of inactivity before parsing the response
-                clearInterval(poller);
-                parseResponse(currentText, batch);
+            const openIdx = currentText.indexOf('[');
+            const closeIdx = currentText.lastIndexOf(']');
+            const isLikelyComplete = openIdx !== -1 && closeIdx > openIdx;
+
+            if (isLikelyComplete && checkCount > 3) {
+                return currentText;
+            }
+            return false;
+        };
+
+        const finalize = (text) => {
+            if (observer) observer.disconnect();
+            if (timeoutTimer) clearInterval(timeoutTimer);
+            if (text) {
+                parseResponse(text, batch);
+            }
+        };
+
+        // 1. MutationObserver is less throttled than setInterval in background tabs
+        const observer = new MutationObserver(() => {
+            const completedText = checkResponse();
+            if (completedText) {
+                finalize(completedText);
+            }
+        });
+
+        // Observe the chat container for text changes
+        const chatContainer = document.querySelector('.ecfcf4d9') || document.body; // Fallback to body if specific class not found, though body is broad
+        observer.observe(chatContainer, {
+            childList: true,
+            subtree: true,
+            characterData: true
+        });
+
+        // 2. Fallback timer for timeouts and to drive `checkCount` if MutationObserver doesn't fire when DOM is idle but done
+        timeoutTimer = setInterval(() => {
+            if (Date.now() - absoluteStartTime > 900000) {
+                finalize(null);
+                markBatchError(batch, "Timeout (Absolute)");
+                return;
+            }
+
+            if (document.hidden) {
+                lastActiveTime = Date.now(); // Don't timeout if hidden, assume it's working
+            } else if (Date.now() - lastActiveTime > 180000) {
+                finalize(null);
+                markBatchError(batch, "Timeout (Idle)");
+                return;
+            }
+
+            // Trigger manual check to increment checkCount
+            const completedText = checkResponse();
+            if (completedText) {
+                finalize(completedText);
             }
         }, 1000);
     }
@@ -1226,15 +1270,22 @@ Input JSON:`
         try {
             let jsonStr = text;
             if (text.includes('```json')) {
-                jsonStr = text.split('```json')[1].split('```')[0];
+                jsonStr = text.split('```json')[1].split('```')[0] || '';
             } else if (text.includes('```')) {
-                jsonStr = text.split('```')[1].split('```')[0];
+                jsonStr = text.split('```')[1].split('```')[0] || '';
             }
 
             const open = jsonStr.indexOf('[');
             const close = jsonStr.lastIndexOf(']');
-            if (open !== -1 && close !== -1) {
+
+            if (open === -1) {
+                throw new Error("No JSON array found in response. This may happen if the tab is backgrounded and DOM updates are frozen.");
+            }
+
+            if (close > open) {
                 jsonStr = jsonStr.substring(open, close + 1);
+            } else {
+                jsonStr = jsonStr.substring(open);
             }
 
             // Expected: [{"id": 1, "trans": "..."}]
